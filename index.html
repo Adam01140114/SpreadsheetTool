@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Narrative Spreadsheet Tool</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg-page: #f8fafc;
+      --bg-card: #ffffff;
+      --bg-card-soft: #f1f5f9;
+      --accent: #0ea5e9;
+      --accent-soft: rgba(14, 165, 233, 0.1);
+      --accent-strong: #0284c7;
+      --border-subtle: #e2e8f0;
+      --text-main: #1e293b;
+      --text-muted: #64748b;
+      --danger: #ef4444;
+      --radius-lg: 14px;
+      --shadow-soft: 0 18px 45px rgba(0, 0, 0, 0.1);
+      --shadow-chip: 0 0 0 1px rgba(148, 163, 184, 0.2);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: radial-gradient(circle at top, #f1f5f9 0, #e2e8f0 55%, #e2e8f0 100%);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+
+    .page-shell {
+      width: 100%;
+      max-width: 1120px;
+      padding: 24px 16px 40px;
+    }
+
+    .header {
+      margin-bottom: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .title-block {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    h1 {
+      font-size: 26px;
+      margin: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    h1 span.badge {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(14, 165, 233, 0.5);
+      background: rgba(240, 249, 255, 0.9);
+      color: #0369a1;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .pill {
+      font-size: 12px;
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+      border-radius: 999px;
+      padding: 6px 11px;
+      border: 1px solid rgba(14, 165, 233, 0.3);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: var(--shadow-chip);
+    }
+
+    .pill-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--accent-strong);
+      box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.2);
+    }
+
+    .layout-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr);
+      gap: 16px;
+    }
+
+    .stack {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .card {
+      background: linear-gradient(145deg, var(--bg-card), var(--bg-card-soft));
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border-subtle);
+      box-shadow: var(--shadow-soft);
+      padding: 16px 18px 14px;
+      backdrop-filter: blur(18px);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 12px;
+      gap: 8px;
+    }
+
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: #475569;
+    }
+
+    .card-caption {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    label {
+      font-weight: 600;
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: #334155;
+    }
+
+    input[type="file"],
+    select {
+      width: 100%;
+      padding: 7px 9px;
+      font-size: 13px;
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+      background: #ffffff;
+      color: var(--text-main);
+      outline: none;
+      transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+    }
+
+    input[type="file"]::file-selector-button {
+      border: none;
+      padding: 6px 10px;
+      margin-right: 10px;
+      border-radius: 999px;
+      background: #f1f5f9;
+      color: #1e293b;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid #cbd5e1;
+    }
+
+    input[type="file"]:hover::file-selector-button {
+      background: #e2e8f0;
+    }
+
+    input[type="file"]:focus-visible,
+    select:focus-visible {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.2);
+    }
+
+    button {
+      padding: 7px 14px;
+      font-size: 13px;
+      border-radius: 999px;
+      border: 1px solid rgba(14, 165, 233, 0.6);
+      cursor: pointer;
+      background: linear-gradient(135deg, #0ea5e9 0, #0284c7 100%);
+      color: #ffffff;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: transform 0.12s ease, box-shadow 0.15s ease, border-color 0.12s ease, background 0.2s ease;
+      box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3);
+      white-space: nowrap;
+    }
+
+    button.secondary {
+      background: #ffffff;
+      border-color: #cbd5e1;
+      color: #475569;
+      box-shadow: none;
+    }
+
+    button:disabled {
+      background: #f1f5f9;
+      color: #94a3b8;
+      border-color: #e2e8f0;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    button:not(:disabled):hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(14, 165, 233, 0.4);
+    }
+
+    button.secondary:not(:disabled):hover {
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      border-color: #94a3b8;
+      background: #f8fafc;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 6px;
+      margin-bottom: 6px;
+    }
+
+    .chip-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .chip-toggle input {
+      margin: 0;
+    }
+
+    .status {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    .status.error {
+      color: var(--danger);
+    }
+
+    .checkbox-list {
+      max-height: 260px;
+      overflow-y: auto;
+      border-radius: 10px;
+      padding: 10px;
+      background: #f8fafc;
+      border: 1px solid var(--border-subtle);
+      font-size: 13px;
+    }
+
+    .checkbox-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 4px;
+      padding: 3px 6px;
+      border-radius: 6px;
+      transition: background 0.12s ease;
+    }
+
+    .checkbox-item:hover {
+      background: rgba(241, 245, 249, 0.8);
+    }
+
+    .checkbox-item input {
+      margin-right: 7px;
+    }
+
+    .preview-wrapper {
+      max-height: 420px;
+      overflow: auto;
+      border-radius: 12px;
+      border: 1px solid var(--border-subtle);
+      background: #ffffff;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 12px;
+      color: var(--text-main);
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid #e2e8f0;
+      padding: 5px 7px;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: #f8fafc;
+      z-index: 2;
+      font-weight: 600;
+      color: #0369a1;
+    }
+
+    tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+
+    tr:nth-child(odd) td {
+      background: #ffffff;
+    }
+
+    @media (max-width: 900px) {
+      .layout-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="header">
+      <div class="title-block">
+        <h1>
+          Narrative Spreadsheet Tool
+          <span class="badge">Utility data prep</span>
+        </h1>
+        <div class="subtitle">
+          Upload the raw export, choose the fields to keep, set a sort order, then download the cleaned file for the consultants.
+        </div>
+      </div>
+      <div class="pill">
+        <span class="pill-dot"></span>
+        Meter history dataset ready
+      </div>
+    </header>
+
+    <div class="layout-grid">
+      <div class="stack">
+        <section class="card">
+          <div class="card-header">
+            <div class="card-title">1. Source file</div>
+            <div class="card-caption">Excel export from Rich</div>
+          </div>
+          <label for="fileInput">Upload Excel file</label>
+          <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" />
+          <div class="status" id="fileStatus">No file loaded yet.</div>
+        </section>
+
+        <section class="card" id="previewCard" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">4. Preview</div>
+            <div class="card-caption">Shows the first 50 rows of the output</div>
+          </div>
+          <div class="preview-wrapper">
+            <table id="previewTable"></table>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="card" id="configCard" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">2. Columns and sorting</div>
+            <div class="card-caption">Shape the final output for consultants</div>
+          </div>
+
+          <label>Columns to include</label>
+          <div class="controls">
+            <button type="button" class="secondary" id="selectAllBtn">Select all</button>
+            <button type="button" class="secondary" id="selectNoneBtn">Select none</button>
+          </div>
+          <div id="columnList" class="checkbox-list"></div>
+
+          <div style="margin-top:14px;">
+            <label for="sortColumn">Sorting</label>
+            <select id="sortColumn"></select>
+            <div class="controls">
+              <label class="chip-toggle">
+                <input type="radio" name="sortOrder" value="asc" checked />
+                Ascending
+              </label>
+              <label class="chip-toggle">
+                <input type="radio" name="sortOrder" value="desc" />
+                Descending
+              </label>
+              <label class="chip-toggle">
+                <input type="checkbox" id="enableSort" checked />
+                Enable sorting
+              </label>
+            </div>
+          </div>
+
+          <div class="controls" style="margin-top:10px;">
+            <button type="button" id="previewBtn">Build preview</button>
+            <button type="button" class="secondary" id="downloadBtn">Download cleaned file</button>
+          </div>
+          <div class="status" id="actionStatus"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let originalRows = [];
+    let headerRow = [];
+    let fileNameBase = "Narrative_Output";
+
+    const fileInput = document.getElementById("fileInput");
+    const fileStatus = document.getElementById("fileStatus");
+    const configCard = document.getElementById("configCard");
+    const previewCard = document.getElementById("previewCard");
+    const columnList = document.getElementById("columnList");
+    const sortColumnSelect = document.getElementById("sortColumn");
+    const selectAllBtn = document.getElementById("selectAllBtn");
+    const selectNoneBtn = document.getElementById("selectNoneBtn");
+    const previewBtn = document.getElementById("previewBtn");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const enableSortCheckbox = document.getElementById("enableSort");
+    const actionStatus = document.getElementById("actionStatus");
+    const previewTable = document.getElementById("previewTable");
+
+    fileInput.addEventListener("change", handleFile);
+
+    function handleFile(e) {
+      const file = e.target.files[0];
+      if (!file) {
+        fileStatus.textContent = "No file loaded yet.";
+        return;
+      }
+      fileStatus.textContent = "Loading file...";
+      fileNameBase = file.name.replace(/\.[^/.]+$/, "") + "_NarrativeOutput";
+
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        try {
+          const data = evt.target.result;
+          const workbook = XLSX.read(data, { type: "array" });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+
+          if (!rows.length) {
+            fileStatus.textContent = "File appears to be empty.";
+            return;
+          }
+
+          const headerIndex = findHeaderRowIndex(rows);
+          headerRow = rows[headerIndex];
+          originalRows = rows.slice(headerIndex + 1);
+
+          fileStatus.textContent =
+            "Loaded sheet \"" + firstSheetName + "\" with " +
+            originalRows.length + " data rows. Header detected at row " +
+            (headerIndex + 1) + ".";
+
+          buildColumnControls();
+          configCard.style.display = "block";
+          previewCard.style.display = "none";
+          actionStatus.textContent = "";
+        } catch (err) {
+          console.error(err);
+          fileStatus.textContent = "Error reading file. Check that it is a valid Excel file.";
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // Detect header row that contains key column names
+    function findHeaderRowIndex(rows) {
+      const expectedHeaders = ["AcctNum", "Premise", "MeterNum"];
+      for (let i = 0; i < rows.length; i++) {
+        const normalized = rows[i].map(c => String(c).trim());
+        const matchAll = expectedHeaders.every(h => normalized.includes(h));
+        if (matchAll) {
+          return i;
+        }
+      }
+      return 0;
+    }
+
+    function buildColumnControls() {
+      columnList.innerHTML = "";
+      sortColumnSelect.innerHTML = "";
+
+      headerRow.forEach((name, index) => {
+        const label = (name && String(name).trim().length)
+          ? String(name).trim()
+          : "Column " + (index + 1);
+
+        const item = document.createElement("div");
+        item.className = "checkbox-item";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = true;
+        checkbox.dataset.colIndex = index;
+
+        const span = document.createElement("span");
+        span.textContent = label;
+
+        item.appendChild(checkbox);
+        item.appendChild(span);
+        columnList.appendChild(item);
+
+        const option = document.createElement("option");
+        option.value = index;
+        option.textContent = label;
+        sortColumnSelect.appendChild(option);
+      });
+    }
+
+    selectAllBtn.addEventListener("click", () => {
+      columnList.querySelectorAll("input[type='checkbox']").forEach(cb => cb.checked = true);
+    });
+
+    selectNoneBtn.addEventListener("click", () => {
+      columnList.querySelectorAll("input[type='checkbox']").forEach(cb => cb.checked = false);
+    });
+
+    previewBtn.addEventListener("click", () => {
+      const result = buildOutputRows();
+      if (!result) return;
+      const outputRows = result;
+      renderPreview(outputRows);
+      previewCard.style.display = "block";
+      actionStatus.textContent = "Preview built.";
+    });
+
+    downloadBtn.addEventListener("click", () => {
+      const outputRows = buildOutputRows();
+      if (!outputRows) return;
+
+      const ws = XLSX.utils.aoa_to_sheet(outputRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "NarrativeOutput");
+      XLSX.writeFile(wb, fileNameBase + ".xlsx");
+      actionStatus.textContent = "Download started.";
+    });
+
+    function buildOutputRows() {
+      if (!headerRow.length || !originalRows.length) {
+        actionStatus.textContent = "No data loaded.";
+        actionStatus.classList.add("error");
+        return null;
+      }
+      actionStatus.classList.remove("error");
+
+      const selectedIndices = [];
+      columnList.querySelectorAll("input[type='checkbox']").forEach(cb => {
+        if (cb.checked) selectedIndices.push(parseInt(cb.dataset.colIndex, 10));
+      });
+
+      if (!selectedIndices.length) {
+        actionStatus.textContent = "Select at least one column.";
+        actionStatus.classList.add("error");
+        return null;
+      }
+
+      const outputHeader = selectedIndices.map(i => headerRow[i]);
+      const dataRows = originalRows.map(row => selectedIndices.map(i => row[i]));
+
+      if (enableSortCheckbox.checked) {
+        const sortIndexFull = parseInt(sortColumnSelect.value, 10);
+        const localSortIndex = selectedIndices.indexOf(sortIndexFull);
+        if (localSortIndex >= 0) {
+          const order = document.querySelector("input[name='sortOrder']:checked").value;
+          dataRows.sort((a, b) => {
+            const va = a[localSortIndex];
+            const vb = b[localSortIndex];
+
+            const na = parseFloat(va);
+            const nb = parseFloat(vb);
+            const bothNumeric = !isNaN(na) && !isNaN(nb);
+
+            let cmp;
+            if (bothNumeric) {
+              cmp = na - nb;
+            } else {
+              cmp = String(va).localeCompare(String(vb));
+            }
+
+            return order === "asc" ? cmp : -cmp;
+          });
+        }
+      }
+
+      return [outputHeader, ...dataRows];
+    }
+
+    function renderPreview(outputRows) {
+      previewTable.innerHTML = "";
+      if (!outputRows || !outputRows.length) return;
+
+      const header = outputRows[0];
+      const maxRows = Math.min(50, outputRows.length - 1);
+
+      const thead = document.createElement("thead");
+      const headerTr = document.createElement("tr");
+      header.forEach(cell => {
+        const th = document.createElement("th");
+        th.textContent = cell;
+        headerTr.appendChild(th);
+      });
+      thead.appendChild(headerTr);
+      previewTable.appendChild(thead);
+
+      const tbody = document.createElement("tbody");
+      for (let i = 1; i <= maxRows; i++) {
+        const row = outputRows[i];
+        if (!row) break;
+        const tr = document.createElement("tr");
+        row.forEach(cell => {
+          const td = document.createElement("td");
+          td.textContent = cell;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      }
+      previewTable.appendChild(tbody);
+    }
+  </script>
+</body>
+</html>
