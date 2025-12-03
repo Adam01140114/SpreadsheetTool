@@ -47,7 +47,7 @@
       margin-bottom: 18px;
       display: flex;
       flex-wrap: wrap;
-      justify-content: space-between;
+      justify-content: center;
       gap: 12px;
       align-items: center;
     }
@@ -56,13 +56,15 @@
       display: flex;
       flex-direction: column;
       gap: 4px;
+      text-align: center;
     }
 
     h1 {
       font-size: 26px;
       margin: 0;
-      display: inline-flex;
+      display: flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
     }
 
@@ -105,15 +107,43 @@
     }
 
     .layout-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr);
+      display: flex;
+      flex-wrap: wrap;
       gap: 16px;
+      justify-content: center;
+      align-items: flex-start;
     }
-
+    
     .stack {
       display: flex;
       flex-direction: column;
       gap: 16px;
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 500px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    
+    @media (min-width: 901px) {
+      .layout-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      
+      .stack {
+        max-width: 500px;
+        width: 100%;
+        margin: 0;
+      }
+      
+      /* Center the first stack by spanning full width and centering */
+      .layout-grid > .stack:first-child {
+        grid-column: 1 / -1;
+        justify-self: center;
+        max-width: 500px;
+      }
     }
 
     .card {
@@ -347,15 +377,10 @@
       <div class="title-block">
         <h1>
           Narrative Spreadsheet Tool
-          <span class="badge">Utility data prep</span>
         </h1>
         <div class="subtitle">
           Upload the raw export, choose the fields to keep, set a sort order, then download the cleaned file for the consultants.
         </div>
-      </div>
-      <div class="pill">
-        <span class="pill-dot"></span>
-        Meter history dataset ready
       </div>
     </header>
 
