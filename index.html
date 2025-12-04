@@ -263,6 +263,137 @@
       box-shadow: none;
     }
 
+    /* Context menu styles */
+    .context-menu {
+      display: none;
+      position: fixed;
+      background: #ffffff;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      z-index: 2000;
+      min-width: 150px;
+      padding: 4px 0;
+    }
+
+    .context-menu.active {
+      display: block;
+    }
+
+    .context-menu-item {
+      padding: 8px 16px;
+      font-size: 13px;
+      color: var(--text-main);
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .context-menu-item:hover {
+      background: #f1f5f9;
+    }
+
+    /* Types modal */
+    .types-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 2001;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .types-modal.active {
+      display: flex;
+    }
+
+    .types-modal-content {
+      background: #ffffff;
+      border-radius: var(--radius-lg);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 500px;
+      width: 90%;
+      max-height: 70vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .types-modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .types-modal-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-main);
+      margin: 0;
+    }
+
+    .types-modal-body {
+      padding: 16px 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .types-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .type-item {
+      padding: 8px 12px;
+      background: #f8fafc;
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--text-main);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .type-item.hidden {
+      opacity: 0.6;
+      background: #f1f5f9;
+    }
+
+    .type-item input[type="checkbox"] {
+      margin-right: 8px;
+      cursor: pointer;
+    }
+
+    .type-value {
+      font-weight: 500;
+      flex: 1;
+      display: flex;
+      align-items: center;
+    }
+
+    .type-count {
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .types-modal-footer {
+      padding: 12px 20px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    th {
+      cursor: context-menu;
+      user-select: none;
+    }
+
     button:not(:disabled):hover {
       transform: translateY(-1px);
       box-shadow: 0 6px 16px rgba(14, 165, 233, 0.4);
@@ -983,6 +1114,7 @@
     let currentPage = 1;
     let rowsPerPage = 100;
     let fullscreenData = null;
+    let originalFullscreenData = null; // Store original unfiltered data
     
     fullscreenBtn.addEventListener("click", () => {
       if (!fullOutputRows || !fullOutputRows.length) {
@@ -991,8 +1123,10 @@
         return;
       }
       
-      // Store data
+      // Store data and reset filters
       fullscreenData = fullOutputRows;
+      originalFullscreenData = fullOutputRows;
+      hiddenTypes.clear();
       
       // Render all data
       renderFullscreenTablePage();
@@ -1054,12 +1188,19 @@
       nextPageBtn.style.display = "none";
       currentPageSpan.parentElement.style.display = "none";
       
-      // Render header
+      // Render header with right-click support
       const thead = document.createElement("thead");
       const headerTr = document.createElement("tr");
-      header.forEach(cell => {
+      header.forEach((cell, colIndex) => {
         const th = document.createElement("th");
         th.textContent = cell;
+        th.dataset.columnIndex = colIndex;
+        
+        // Add right-click handler
+        th.addEventListener("contextmenu", (e) => {
+          showContextMenu(e, colIndex, cell);
+        });
+        
         headerTr.appendChild(th);
       });
       thead.appendChild(headerTr);
@@ -1069,18 +1210,28 @@
       const tbody = document.createElement("tbody");
       fullscreenTable.appendChild(tbody);
       
-      // Render rows in batches to avoid freezing
-      const batchSize = 500; // Render 500 rows at a time
-      let currentIndex = 1;
-      let renderedCount = 0;
+      // Render rows with bidirectional infinite scrolling (load 1000 at a time)
+      const rowsPerLoad = 1000;
+      const batchSize = 500; // Render 500 rows at a time within each load
+      let loadedStartIndex = 1; // First loaded row index (inclusive)
+      let loadedEndIndex = 1; // Last loaded row index (exclusive, so next row to load)
+      let isLoading = false;
       
-      function renderBatch() {
-        const endIndex = Math.min(currentIndex + batchSize, fullscreenData.length);
+      const tableWrapper = fullscreenTable.closest('.modal-table-wrapper');
+      
+      // Track which rows are currently rendered in DOM
+      const renderedRows = new Map(); // Maps row index to TR element
+      
+      function renderBatchForward(targetEndIndex) {
+        if (isLoading || loadedEndIndex >= fullscreenData.length) return;
+        isLoading = true;
+        
+        const endIndex = Math.min(loadedEndIndex + batchSize, targetEndIndex);
         
         // Create document fragment for better performance
         const fragment = document.createDocumentFragment();
         
-        for (let i = currentIndex; i < endIndex; i++) {
+        for (let i = loadedEndIndex; i < endIndex; i++) {
           const row = fullscreenData[i];
           if (!row) break;
           
@@ -1091,36 +1242,329 @@
             tr.appendChild(td);
           });
           fragment.appendChild(tr);
-          renderedCount++;
+          renderedRows.set(i, tr);
         }
         
         // Append batch to tbody
         tbody.appendChild(fragment);
         
-        // Update progress
-        paginationInfo.textContent = `Loaded ${renderedCount.toLocaleString()} of ${totalRows.toLocaleString()} rows...`;
+        loadedEndIndex = endIndex;
+        isLoading = false;
         
-        currentIndex = endIndex;
-        
-        // Continue rendering if there are more rows
-        if (currentIndex < fullscreenData.length) {
-          // Use requestAnimationFrame for smooth rendering
-          requestAnimationFrame(renderBatch);
+        // Continue rendering if there are more rows in this load batch
+        if (loadedEndIndex < targetEndIndex && loadedEndIndex < fullscreenData.length) {
+          requestAnimationFrame(() => renderBatchForward(targetEndIndex));
         } else {
-          // All rows rendered
-          paginationInfo.textContent = `Showing all ${totalRows.toLocaleString()} rows`;
-          
-          // Scroll to top of table
-          const tableWrapper = fullscreenTable.closest('.modal-table-wrapper');
-          if (tableWrapper) {
-            tableWrapper.scrollTop = 0;
-          }
+          updateStatus();
         }
       }
       
-      // Start rendering
-      renderBatch();
+      function renderBatchBackward(targetStartIndex) {
+        if (isLoading || loadedStartIndex <= 1) return;
+        isLoading = true;
+        
+        const startIndex = Math.max(targetStartIndex, loadedStartIndex - batchSize);
+        
+        // Store current scroll position and first visible row
+        const scrollTop = tableWrapper.scrollTop;
+        const firstVisibleRow = tbody.firstElementChild;
+        const firstRowOffset = firstVisibleRow ? firstVisibleRow.offsetTop : 0;
+        
+        // Create document fragment for better performance
+        const fragment = document.createDocumentFragment();
+        
+        for (let i = startIndex; i < loadedStartIndex; i++) {
+          const row = fullscreenData[i];
+          if (!row) continue;
+          
+          const tr = document.createElement("tr");
+          row.forEach(cell => {
+            const td = document.createElement("td");
+            td.textContent = cell;
+            tr.appendChild(td);
+          });
+          fragment.appendChild(tr);
+          renderedRows.set(i, tr);
+        }
+        
+        // Insert batch at the beginning of tbody
+        if (tbody.firstElementChild) {
+          tbody.insertBefore(fragment, tbody.firstElementChild);
+        } else {
+          tbody.appendChild(fragment);
+        }
+        
+        // Restore scroll position to maintain user's view
+        const newFirstRowOffset = tbody.firstElementChild ? tbody.firstElementChild.offsetTop : 0;
+        const offsetDiff = newFirstRowOffset - firstRowOffset;
+        tableWrapper.scrollTop = scrollTop + offsetDiff;
+        
+        loadedStartIndex = startIndex;
+        isLoading = false;
+        
+        // Continue rendering if there are more rows to load in this batch
+        if (loadedStartIndex > targetStartIndex && loadedStartIndex > 1) {
+          requestAnimationFrame(() => renderBatchBackward(targetStartIndex));
+        } else {
+          updateStatus();
+        }
+      }
+      
+      function updateStatus() {
+        const loadedCount = loadedEndIndex - loadedStartIndex;
+        if (loadedStartIndex === 1 && loadedEndIndex >= fullscreenData.length) {
+          paginationInfo.textContent = `Showing all ${totalRows.toLocaleString()} rows`;
+        } else {
+          paginationInfo.textContent = `Showing rows ${loadedStartIndex.toLocaleString()}-${(loadedEndIndex - 1).toLocaleString()} of ${totalRows.toLocaleString()} (scroll for more)`;
+        }
+      }
+      
+      function loadNextBatch() {
+        if (isLoading || loadedEndIndex >= fullscreenData.length) return;
+        const targetEndIndex = Math.min(loadedEndIndex + rowsPerLoad, fullscreenData.length);
+        renderBatchForward(targetEndIndex);
+      }
+      
+      function loadPreviousBatch() {
+        if (isLoading || loadedStartIndex <= 1) return;
+        const targetStartIndex = Math.max(1, loadedStartIndex - rowsPerLoad);
+        renderBatchBackward(targetStartIndex);
+      }
+      
+      // Scroll event listener for bidirectional infinite scrolling
+      let scrollTimeout;
+      tableWrapper.addEventListener("scroll", () => {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(() => {
+          const scrollTop = tableWrapper.scrollTop;
+          const scrollHeight = tableWrapper.scrollHeight;
+          const clientHeight = tableWrapper.clientHeight;
+          
+          // Load more when user scrolls within 200px of bottom
+          if (scrollTop + clientHeight >= scrollHeight - 200) {
+            loadNextBatch();
+          }
+          
+          // Load previous when user scrolls within 200px of top
+          if (scrollTop <= 200) {
+            loadPreviousBatch();
+          }
+        }, 100);
+      });
+      
+      // Initial load of first 1000 rows
+      loadNextBatch();
+      
+      // Scroll to top of table
+      tableWrapper.scrollTop = 0;
     }
+
+    // Context menu and types modal functionality
+    const contextMenu = document.createElement("div");
+    contextMenu.className = "context-menu";
+    contextMenu.id = "contextMenu";
+    contextMenu.innerHTML = '<div class="context-menu-item" id="viewTypesItem">View types</div>';
+    document.body.appendChild(contextMenu);
+
+    const typesModal = document.createElement("div");
+    typesModal.className = "types-modal";
+    typesModal.id = "typesModal";
+    typesModal.innerHTML = `
+      <div class="types-modal-content">
+        <div class="types-modal-header">
+          <h3 class="types-modal-title" id="typesModalTitle">Column Types</h3>
+          <button class="modal-close" id="typesModalClose" aria-label="Close">×</button>
+        </div>
+        <div class="types-modal-body">
+          <div class="types-list" id="typesList"></div>
+        </div>
+        <div class="types-modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+          <button type="button" class="secondary" id="clearFiltersBtn" style="display: none;">Clear filters</button>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" id="applyFiltersBtn">Hide selected</button>
+            <button type="button" class="secondary" id="typesModalCloseBtn">Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(typesModal);
+
+    const viewTypesItem = document.getElementById("viewTypesItem");
+    const typesModalClose = document.getElementById("typesModalClose");
+    const typesModalCloseBtn = document.getElementById("typesModalCloseBtn");
+    const typesModalTitle = document.getElementById("typesModalTitle");
+    const typesList = document.getElementById("typesList");
+    const applyFiltersBtn = document.getElementById("applyFiltersBtn");
+    const clearFiltersBtn = document.getElementById("clearFiltersBtn");
+
+    let currentColumnIndex = -1;
+    let currentColumnName = "";
+    let hiddenTypes = new Set(); // Track hidden types for current column
+
+    // Close context menu when clicking elsewhere
+    document.addEventListener("click", (e) => {
+      if (!contextMenu.contains(e.target)) {
+        contextMenu.classList.remove("active");
+      }
+    });
+
+    // Close types modal
+    function closeTypesModal() {
+      typesModal.classList.remove("active");
+      document.body.style.overflow = "";
+    }
+
+    typesModalClose.addEventListener("click", closeTypesModal);
+    typesModalCloseBtn.addEventListener("click", closeTypesModal);
+    typesModal.addEventListener("click", (e) => {
+      if (e.target === typesModal) {
+        closeTypesModal();
+      }
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && typesModal.classList.contains("active")) {
+        closeTypesModal();
+      }
+    });
+
+    // Show context menu
+    function showContextMenu(e, columnIndex, columnName) {
+      e.preventDefault();
+      currentColumnIndex = columnIndex;
+      currentColumnName = columnName;
+      
+      contextMenu.style.left = e.pageX + "px";
+      contextMenu.style.top = e.pageY + "px";
+      contextMenu.classList.add("active");
+    }
+
+    // View types handler
+    viewTypesItem.addEventListener("click", () => {
+      contextMenu.classList.remove("active");
+      
+      if (!fullscreenData || currentColumnIndex < 0) return;
+      
+      // Collect unique values and their counts
+      const valueCounts = new Map();
+      for (let i = 1; i < fullscreenData.length; i++) {
+        const row = fullscreenData[i];
+        if (row && row[currentColumnIndex] !== undefined && row[currentColumnIndex] !== null && row[currentColumnIndex] !== "") {
+          const value = String(row[currentColumnIndex]).trim();
+          valueCounts.set(value, (valueCounts.get(value) || 0) + 1);
+        }
+      }
+      
+      // Sort by count (descending), then by value (ascending)
+      const sortedTypes = Array.from(valueCounts.entries()).sort((a, b) => {
+        if (b[1] !== a[1]) return b[1] - a[1]; // Sort by count descending
+        return a[0].localeCompare(b[0]); // Then by value ascending
+      });
+      
+      // Update modal title
+      typesModalTitle.textContent = `Types in "${currentColumnName}"`;
+      
+      // Clear and populate types list
+      typesList.innerHTML = "";
+      if (sortedTypes.length === 0) {
+        typesList.innerHTML = '<div style="padding: 12px; color: var(--text-muted); text-align: center;">No data found in this column</div>';
+      } else {
+        sortedTypes.forEach(([value, count]) => {
+          const typeItem = document.createElement("div");
+          typeItem.className = "type-item";
+          const isHidden = hiddenTypes.has(value);
+          if (isHidden) {
+            typeItem.classList.add("hidden");
+          }
+          typeItem.innerHTML = `
+            <span class="type-value">
+              <input type="checkbox" data-type-value="${value.replace(/"/g, '&quot;')}" ${isHidden ? 'checked' : ''} />
+              ${value}
+            </span>
+            <span class="type-count">${count.toLocaleString()} ${count === 1 ? 'entry' : 'entries'}</span>
+          `;
+          typesList.appendChild(typeItem);
+        });
+      }
+      
+      // Update filter button visibility
+      clearFiltersBtn.style.display = hiddenTypes.size > 0 ? "block" : "none";
+      
+      // Show modal
+      typesModal.classList.add("active");
+      document.body.style.overflow = "hidden";
+    });
+
+    // Apply filters button
+    applyFiltersBtn.addEventListener("click", () => {
+      // Collect checked types to hide
+      const checkboxes = typesList.querySelectorAll('input[type="checkbox"]:checked');
+      hiddenTypes.clear();
+      checkboxes.forEach(cb => {
+        hiddenTypes.add(cb.dataset.typeValue);
+      });
+      
+      // Store original data if not already stored
+      if (!originalFullscreenData) {
+        originalFullscreenData = fullscreenData;
+      }
+      
+      // Filter the data
+      if (hiddenTypes.size > 0) {
+        fullscreenData = originalFullscreenData.filter((row, index) => {
+          // Keep header row
+          if (index === 0) return true;
+          // Filter out rows where the column value is in hiddenTypes
+          const cellValue = String(row[currentColumnIndex] || "").trim();
+          return !hiddenTypes.has(cellValue);
+        });
+      } else {
+        // No filters, restore original data
+        fullscreenData = originalFullscreenData;
+      }
+      
+      // Re-render the table with filtered data
+      renderFullscreenTablePage();
+      
+      // Update types list to reflect hidden state
+      typesList.querySelectorAll('.type-item').forEach(item => {
+        const checkbox = item.querySelector('input[type="checkbox"]');
+        const typeValue = checkbox.dataset.typeValue;
+        if (hiddenTypes.has(typeValue)) {
+          item.classList.add("hidden");
+        } else {
+          item.classList.remove("hidden");
+        }
+      });
+      
+      // Update clear filters button
+      clearFiltersBtn.style.display = hiddenTypes.size > 0 ? "block" : "none";
+    });
+
+    // Clear filters button
+    clearFiltersBtn.addEventListener("click", () => {
+      hiddenTypes.clear();
+      
+      // Restore original data
+      if (originalFullscreenData) {
+        fullscreenData = originalFullscreenData;
+      }
+      
+      // Uncheck all checkboxes
+      typesList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = false;
+      });
+      
+      // Update UI
+      typesList.querySelectorAll('.type-item').forEach(item => {
+        item.classList.remove("hidden");
+      });
+      
+      clearFiltersBtn.style.display = "none";
+      
+      // Re-render the table
+      renderFullscreenTablePage();
+    });
   </script>
 </body>
 </html>
