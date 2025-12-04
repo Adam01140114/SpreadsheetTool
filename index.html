@@ -423,6 +423,25 @@
       color: #0369a1;
     }
 
+    th.row-number,
+    td.row-number {
+      background: #f1f5f9;
+      color: #64748b;
+      font-weight: 500;
+      text-align: center;
+      min-width: 50px;
+      width: 50px;
+      border-right: 2px solid #cbd5e1;
+      position: sticky;
+      left: 0;
+      z-index: 1;
+    }
+
+    th.row-number {
+      z-index: 3;
+      background: #f8fafc;
+    }
+
     tr:nth-child(even) td {
       background: #f8fafc;
     }
@@ -991,11 +1010,10 @@
         return;
       }
       
-      // Store data and reset to page 1
+      // Store data
       fullscreenData = fullOutputRows;
-      currentPage = 1;
       
-      // Render first page
+      // Render all data
       renderFullscreenTablePage();
       fullscreenModal.classList.add("active");
       document.body.style.overflow = "hidden";
@@ -1044,22 +1062,26 @@
       
       const header = fullscreenData[0];
       const totalRows = fullscreenData.length - 1;
-      const totalPages = Math.ceil(totalRows / rowsPerPage);
       
-      // Update pagination info
-      const startRow = (currentPage - 1) * rowsPerPage + 1;
-      const endRow = Math.min(currentPage * rowsPerPage, totalRows);
-      paginationInfo.textContent = `Showing rows ${startRow.toLocaleString()} - ${endRow.toLocaleString()} of ${totalRows.toLocaleString()}`;
-      currentPageSpan.textContent = currentPage;
-      totalPagesSpan.textContent = totalPages;
+      // Update info to show total rows
+      paginationInfo.textContent = `Total: ${totalRows.toLocaleString()} rows (showing visible rows only)`;
+      currentPageSpan.textContent = "1";
+      totalPagesSpan.textContent = "1";
       
-      // Enable/disable navigation buttons
-      prevPageBtn.disabled = currentPage === 1;
-      nextPageBtn.disabled = currentPage === totalPages;
+      // Hide pagination controls since we're using virtual scrolling
+      prevPageBtn.style.display = "none";
+      nextPageBtn.style.display = "none";
+      currentPageSpan.parentElement.style.display = "none";
       
       // Render header
       const thead = document.createElement("thead");
       const headerTr = document.createElement("tr");
+      // Add row number column header
+      const rowNumHeader = document.createElement("th");
+      rowNumHeader.className = "row-number";
+      rowNumHeader.textContent = "#";
+      headerTr.appendChild(rowNumHeader);
+      // Add data column headers
       header.forEach(cell => {
         const th = document.createElement("th");
         th.textContent = cell;
@@ -1068,27 +1090,75 @@
       thead.appendChild(headerTr);
       fullscreenTable.appendChild(thead);
       
-      // Render only the current page of rows
+      // Create tbody
       const tbody = document.createElement("tbody");
-      const startIndex = (currentPage - 1) * rowsPerPage + 1;
-      const endIndex = Math.min(startIndex + rowsPerPage, fullscreenData.length);
-      
-      for (let i = startIndex; i < endIndex; i++) {
-        const row = fullscreenData[i];
-        if (!row) break;
-        const tr = document.createElement("tr");
-        row.forEach(cell => {
-          const td = document.createElement("td");
-          td.textContent = cell;
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      }
       fullscreenTable.appendChild(tbody);
       
-      // Scroll to top of table
+      // Virtual scrolling: only render ~1000 visible rows at a time
       const tableWrapper = fullscreenTable.closest('.modal-table-wrapper');
+      const rowHeight = 25; // Approximate row height in pixels
+      const bufferRows = 50; // Extra rows to render above/below viewport
+      let startIndex = 1;
+      let endIndex = Math.min(startIndex + 1000, fullscreenData.length);
+      
+      function renderVisibleRows() {
+        tbody.innerHTML = "";
+        
+        const fragment = document.createDocumentFragment();
+        for (let i = startIndex; i < endIndex; i++) {
+          const row = fullscreenData[i];
+          if (!row) break;
+          
+          const tr = document.createElement("tr");
+          row.forEach(cell => {
+            const td = document.createElement("td");
+            td.textContent = cell;
+            tr.appendChild(td);
+          });
+          fragment.appendChild(tr);
+        }
+        
+        tbody.appendChild(fragment);
+        
+        // Update info
+        paginationInfo.textContent = `Showing rows ${startIndex.toLocaleString()} - ${Math.min(endIndex - 1, totalRows).toLocaleString()} of ${totalRows.toLocaleString()}`;
+      }
+      
+      // Initial render of first 1000 rows
+      renderVisibleRows();
+      
+      // Update visible rows on scroll
       if (tableWrapper) {
+        let scrollTimeout;
+        tableWrapper.addEventListener('scroll', () => {
+          clearTimeout(scrollTimeout);
+          
+          scrollTimeout = setTimeout(() => {
+            const scrollTop = tableWrapper.scrollTop;
+            const viewportHeight = tableWrapper.clientHeight;
+            
+            // Calculate which rows should be visible
+            const visibleStart = Math.max(1, Math.floor(scrollTop / rowHeight) - bufferRows);
+            const visibleEnd = Math.min(
+              Math.ceil((scrollTop + viewportHeight) / rowHeight) + bufferRows,
+              fullscreenData.length
+            );
+            
+            // Only re-render if we need to show different rows
+            if (visibleStart < startIndex || visibleEnd > endIndex) {
+              startIndex = Math.max(1, visibleStart);
+              endIndex = Math.min(visibleEnd, fullscreenData.length);
+              
+              // Ensure we show at least 1000 rows if available
+              if (endIndex - startIndex < 1000 && endIndex < fullscreenData.length) {
+                endIndex = Math.min(startIndex + 1000, fullscreenData.length);
+              }
+              
+              renderVisibleRows();
+            }
+          }, 50); // Debounce scroll events
+        });
+        
         tableWrapper.scrollTop = 0;
       }
     }
