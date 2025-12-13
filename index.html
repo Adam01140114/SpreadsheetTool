@@ -227,7 +227,8 @@
     }
 
     input[type="file"]:focus-visible,
-    select:focus-visible {
+    select:focus-visible,
+    #typesSearchInput:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.2);
     }
@@ -554,6 +555,36 @@
       color: #0369a1;
     }
 
+    .column-letter-row {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      background: #e2e8f0;
+    }
+
+    .column-letter-row th {
+      position: sticky;
+      top: 0;
+      background: #e2e8f0;
+      color: #475569;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 7px;
+      text-align: center;
+      border-bottom: 2px solid #cbd5e1;
+      border-right: 1px solid #cbd5e1;
+      z-index: 3;
+    }
+
+    .column-letter-row th:last-child {
+      border-right: none;
+    }
+
+    thead tr:not(.column-letter-row) th {
+      top: 24px;
+      z-index: 2;
+    }
+
     tr:nth-child(even) td {
       background: #f8fafc;
     }
@@ -749,6 +780,7 @@
     let originalWorksheet = null;
     let dateColumnFormats = new Map(); // Maps column index to date format string
     let fullOutputRows = null; // Store full output for fullscreen view
+    let sortedColumns = new Map(); // Track sorted columns by column name: { columnName: { order: 'newest'|'oldest' } }
 
     const fileInput = document.getElementById("fileInput");
     const fileStatus = document.getElementById("fileStatus");
@@ -763,6 +795,21 @@
     const enableSortCheckbox = document.getElementById("enableSort");
     const actionStatus = document.getElementById("actionStatus");
     const previewTable = document.getElementById("previewTable");
+
+    // Handle enable sorting checkbox - uncheck radio buttons when disabled
+    enableSortCheckbox.addEventListener("change", () => {
+      const radioButtons = document.querySelectorAll('input[name="sortOrder"]');
+      if (!enableSortCheckbox.checked) {
+        // Uncheck both radio buttons
+        radioButtons.forEach(radio => radio.checked = false);
+      } else {
+        // If checked and no radio is selected, default to ascending
+        const hasChecked = Array.from(radioButtons).some(radio => radio.checked);
+        if (!hasChecked) {
+          document.querySelector('input[name="sortOrder"][value="asc"]').checked = true;
+        }
+      }
+    });
 
     fileInput.addEventListener("change", handleFile);
 
@@ -872,6 +919,18 @@
       return 0;
     }
 
+    // Convert column index to Excel column letter (0 -> A, 1 -> B, 26 -> AA, etc.)
+    function indexToColumnLetter(index) {
+      let result = "";
+      index++; // Convert to 1-based
+      while (index > 0) {
+        index--;
+        result = String.fromCharCode(65 + (index % 26)) + result;
+        index = Math.floor(index / 26);
+      }
+      return result;
+    }
+
     function buildColumnControls() {
       columnList.innerHTML = "";
       sortColumnSelect.innerHTML = "";
@@ -880,6 +939,7 @@
         const label = (name && String(name).trim().length)
           ? String(name).trim()
           : "Column " + (index + 1);
+        const columnLetter = indexToColumnLetter(index);
 
         const item = document.createElement("div");
         item.className = "checkbox-item";
@@ -890,7 +950,7 @@
         checkbox.dataset.colIndex = index;
 
         const span = document.createElement("span");
-        span.textContent = label;
+        span.textContent = `${columnLetter}: ${label}`;
 
         item.appendChild(checkbox);
         item.appendChild(span);
@@ -1032,7 +1092,211 @@
         }
       }
 
-      return [outputHeader, ...dataRows];
+      let outputRows = [outputHeader, ...dataRows];
+      
+      // Apply any active aggregations
+      if (aggregatedColumns.size > 0) {
+        outputRows = applyAggregationsToOutput(outputRows);
+      }
+      
+      // Apply any active sorts
+      if (sortedColumns.size > 0) {
+        outputRows = applySortsToOutput(outputRows);
+      }
+      
+      // Apply active filters if they exist
+      if (activeFilters && activeFilters.hiddenTypes && activeFilters.hiddenTypes.size > 0) {
+        // Find the column in the output by name (more reliable than index)
+        const filterColumnName = activeFilters.columnName || (activeFilters.columnIndex !== undefined ? headerRow[activeFilters.columnIndex] : null);
+        const outputColumnIndex = filterColumnName ? outputHeader.indexOf(filterColumnName) : -1;
+        
+        if (outputColumnIndex >= 0) {
+          // Filter the data based on active filters
+          outputRows = outputRows.filter((row, index) => {
+            if (index === 0) return true; // Keep header row
+            const cellValue = String(row[outputColumnIndex] || "").trim();
+            return !activeFilters.hiddenTypes.has(cellValue);
+          });
+        }
+      }
+      
+      return outputRows;
+    }
+
+    // Apply aggregations to output data
+    function applyAggregationsToOutput(outputRows) {
+      if (!outputRows || outputRows.length < 2) return outputRows;
+      
+      const header = outputRows[0];
+      const result = [header];
+      
+      // Find which output columns need aggregation
+      const aggregationMap = new Map(); // outputIndex -> { type, columnName }
+      header.forEach((colName, outputIndex) => {
+        if (aggregatedColumns.has(colName)) {
+          const aggInfo = aggregatedColumns.get(colName);
+          aggregationMap.set(outputIndex, aggInfo);
+        }
+      });
+      
+      if (aggregationMap.size === 0) {
+        return outputRows; // No aggregations to apply
+      }
+      
+      // Group rows by aggregated date values
+      const groups = new Map();
+      
+      for (let i = 1; i < outputRows.length; i++) {
+        const row = outputRows[i];
+        if (!row) continue;
+        
+        // Create group key from aggregated date values
+        const groupKey = [];
+        aggregationMap.forEach((aggInfo, outputIndex) => {
+          const dateValue = String(row[outputIndex] || "").trim();
+          if (!dateValue) {
+            groupKey.push("");
+            return;
+          }
+          
+          const date = new Date(dateValue);
+          if (isNaN(date.getTime())) {
+            groupKey.push(dateValue); // Keep original if not a date
+            return;
+          }
+          
+          // Get aggregated value
+          let aggregatedValue;
+          if (aggInfo.type === "month") {
+            const year = date.getFullYear();
+            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            const month = monthNames[date.getMonth()];
+            aggregatedValue = `${month} ${year}`;
+          } else { // year
+            aggregatedValue = String(date.getFullYear());
+          }
+          groupKey.push(aggregatedValue);
+        });
+        
+        const key = groupKey.join("|");
+        if (!groups.has(key)) {
+          groups.set(key, []);
+        }
+        groups.get(key).push([...row]);
+      }
+      
+      // Combine rows in each group
+      const sortedGroups = Array.from(groups.entries()).sort((a, b) => {
+        return a[0].localeCompare(b[0]);
+      });
+      
+      sortedGroups.forEach(([groupKey, rows]) => {
+        if (rows.length === 0) return;
+        
+        // Create aggregated row
+        const aggregatedRow = [];
+        const numCols = header.length;
+        
+        for (let colIdx = 0; colIdx < numCols; colIdx++) {
+          if (aggregationMap.has(colIdx)) {
+            // This is an aggregated date column - use the aggregated value from group key
+            const keyParts = groupKey.split("|");
+            const aggIndex = Array.from(aggregationMap.keys()).indexOf(colIdx);
+            aggregatedRow.push(keyParts[aggIndex] || "");
+          } else {
+            // For other columns, take the first non-empty value (or sum if numeric)
+            const values = rows.map(row => row[colIdx]).filter(v => v !== undefined && v !== null && v !== "");
+            
+            if (values.length === 0) {
+              aggregatedRow.push("");
+            } else {
+              // Try to parse as number
+              const numericValues = values.map(v => {
+                const num = parseFloat(String(v).replace(/[^0-9.-]/g, ''));
+                return isNaN(num) ? null : num;
+              }).filter(n => n !== null);
+              
+              if (numericValues.length > 0) {
+                // Sum numeric values
+                const sum = numericValues.reduce((a, b) => a + b, 0);
+                aggregatedRow.push(sum);
+              } else {
+                // For text values, take the first value
+                aggregatedRow.push(values[0]);
+              }
+            }
+          }
+        }
+        
+        result.push(aggregatedRow);
+      });
+      
+      return result;
+    }
+
+    // Apply sorts to output data
+    function applySortsToOutput(outputRows) {
+      if (!outputRows || outputRows.length < 2) return outputRows;
+      
+      const header = outputRows[0];
+      const dataRows = outputRows.slice(1);
+      
+      // Find which columns need sorting
+      const sortMap = new Map(); // outputIndex -> { order }
+      header.forEach((colName, outputIndex) => {
+        if (sortedColumns.has(colName)) {
+          const sortInfo = sortedColumns.get(colName);
+          sortMap.set(outputIndex, sortInfo);
+        }
+      });
+      
+      if (sortMap.size === 0) {
+        return outputRows; // No sorts to apply
+      }
+      
+      // Sort by the first sorted column (if multiple, use first one)
+      const firstSortEntry = Array.from(sortMap.entries())[0];
+      const [sortColumnIndex, sortInfo] = firstSortEntry;
+      
+      // Sort rows
+      dataRows.sort((a, b) => {
+        const dateA = String(a[sortColumnIndex] || "").trim();
+        const dateB = String(b[sortColumnIndex] || "").trim();
+        
+        // Parse dates
+        let parsedA = null;
+        let parsedB = null;
+        
+        if (dateA) {
+          if (/^[A-Za-z]{3} \d{4}$/.test(dateA)) {
+            parsedA = new Date(dateA);
+          } else if (/^\d{4}$/.test(dateA)) {
+            parsedA = new Date(dateA + "-01-01");
+          } else {
+            parsedA = new Date(dateA);
+          }
+        }
+        
+        if (dateB) {
+          if (/^[A-Za-z]{3} \d{4}$/.test(dateB)) {
+            parsedB = new Date(dateB);
+          } else if (/^\d{4}$/.test(dateB)) {
+            parsedB = new Date(dateB + "-01-01");
+          } else {
+            parsedB = new Date(dateB);
+          }
+        }
+        
+        // Handle invalid dates
+        if (!parsedA || isNaN(parsedA.getTime())) return 1;
+        if (!parsedB || isNaN(parsedB.getTime())) return -1;
+        
+        // Compare dates
+        const comparison = parsedA.getTime() - parsedB.getTime();
+        return sortInfo.order === "newest" ? -comparison : comparison;
+      });
+      
+      return [header, ...dataRows];
     }
 
     function renderPreview(outputRows) {
@@ -1117,16 +1381,53 @@
     let originalFullscreenData = null; // Store original unfiltered data
     
     fullscreenBtn.addEventListener("click", () => {
-      if (!fullOutputRows || !fullOutputRows.length) {
+      // Temporarily store active filters
+      const tempActiveFilters = activeFilters;
+      
+      // Temporarily clear filters to get truly unfiltered data
+      activeFilters = null;
+      const currentOutput = buildOutputRows();
+      
+      // Restore active filters
+      activeFilters = tempActiveFilters;
+      
+      if (!currentOutput || !currentOutput.length) {
         actionStatus.textContent = "No preview data available. Build preview first.";
         actionStatus.classList.add("error");
         return;
       }
       
-      // Store data and reset filters
-      fullscreenData = fullOutputRows;
-      originalFullscreenData = fullOutputRows;
-      hiddenTypes.clear();
+      // Store original unfiltered data (before type filters)
+      originalFullscreenData = currentOutput;
+      
+      // Apply active filters if they exist
+      if (activeFilters && activeFilters.columnIndex !== undefined && activeFilters.hiddenTypes && activeFilters.hiddenTypes.size > 0) {
+        // Find the column index in the output data
+        const filterColumnName = activeFilters.columnName || (activeFilters.columnIndex !== undefined ? currentOutput[0][activeFilters.columnIndex] : null);
+        const outputColumnIndex = filterColumnName ? currentOutput[0].indexOf(filterColumnName) : -1;
+        
+        if (outputColumnIndex >= 0) {
+          // Filter the data based on active filters
+          const filteredData = originalFullscreenData.filter((row, index) => {
+            if (index === 0) return true; // Keep header row
+            const cellValue = String(row[outputColumnIndex] || "").trim();
+            return !activeFilters.hiddenTypes.has(cellValue);
+          });
+          fullscreenData = filteredData;
+          fullOutputRows = filteredData; // Update for download
+          hiddenTypes = new Set(activeFilters.hiddenTypes);
+        } else {
+          // Column not found in output, use unfiltered data
+          fullscreenData = originalFullscreenData;
+          fullOutputRows = originalFullscreenData;
+          hiddenTypes.clear();
+        }
+      } else {
+        // No filters, use unfiltered data (which already has aggregations applied from buildOutputRows)
+        fullscreenData = originalFullscreenData;
+        fullOutputRows = originalFullscreenData; // Update for download
+        hiddenTypes.clear();
+      }
       
       // Render all data
       renderFullscreenTablePage();
@@ -1168,6 +1469,14 @@
     function closeModal() {
       fullscreenModal.classList.remove("active");
       document.body.style.overflow = "";
+      
+      // Update preview to reflect any active filters
+      if (previewCard.style.display !== "none") {
+        const previewResult = buildOutputRows();
+        if (previewResult) {
+          renderPreview(previewResult);
+        }
+      }
     }
     
     function renderFullscreenTablePage() {
@@ -1188,8 +1497,18 @@
       nextPageBtn.style.display = "none";
       currentPageSpan.parentElement.style.display = "none";
       
-      // Render header with right-click support
+      // Render column letters row
       const thead = document.createElement("thead");
+      const columnLetterTr = document.createElement("tr");
+      columnLetterTr.className = "column-letter-row";
+      header.forEach((cell, colIndex) => {
+        const th = document.createElement("th");
+        th.textContent = indexToColumnLetter(colIndex);
+        columnLetterTr.appendChild(th);
+      });
+      thead.appendChild(columnLetterTr);
+      
+      // Render header with right-click support
       const headerTr = document.createElement("tr");
       header.forEach((cell, colIndex) => {
         const th = document.createElement("th");
@@ -1363,7 +1682,12 @@
     const contextMenu = document.createElement("div");
     contextMenu.className = "context-menu";
     contextMenu.id = "contextMenu";
-    contextMenu.innerHTML = '<div class="context-menu-item" id="viewTypesItem">View types</div>';
+    contextMenu.innerHTML = `
+      <div class="context-menu-item" id="viewTypesItem">View types</div>
+      <div class="context-menu-item" id="aggregateItem" style="display: none;">Aggregate</div>
+      <div class="context-menu-item" id="unaggregateItem" style="display: none;">Unaggregate</div>
+      <div class="context-menu-item" id="sortItem" style="display: none;">Sort</div>
+    `;
     document.body.appendChild(contextMenu);
 
     const typesModal = document.createElement("div");
@@ -1376,11 +1700,15 @@
           <button class="modal-close" id="typesModalClose" aria-label="Close">×</button>
         </div>
         <div class="types-modal-body">
+          <div style="margin-bottom: 12px;">
+            <input type="text" id="typesSearchInput" placeholder="Search types..." style="width: 100%; padding: 8px 12px; font-size: 13px; border-radius: 6px; border: 1px solid var(--border-subtle); outline: none; transition: border-color 0.14s ease, box-shadow 0.14s ease;" />
+          </div>
           <div class="types-list" id="typesList"></div>
         </div>
         <div class="types-modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
           <button type="button" class="secondary" id="clearFiltersBtn" style="display: none;">Clear filters</button>
-          <div style="display: flex; gap: 8px;">
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button type="button" class="secondary" id="selectAllTypesBtn" style="font-size: 12px; padding: 4px 10px;">Select all</button>
             <button type="button" id="applyFiltersBtn">Hide selected</button>
             <button type="button" class="secondary" id="typesModalCloseBtn">Close</button>
           </div>
@@ -1389,17 +1717,94 @@
     `;
     document.body.appendChild(typesModal);
 
+    // Aggregate modal
+    const aggregateModal = document.createElement("div");
+    aggregateModal.className = "types-modal";
+    aggregateModal.id = "aggregateModal";
+    aggregateModal.innerHTML = `
+      <div class="types-modal-content">
+        <div class="types-modal-header">
+          <h3 class="types-modal-title" id="aggregateModalTitle">Aggregate Date Column</h3>
+          <button class="modal-close" id="aggregateModalClose" aria-label="Close">×</button>
+        </div>
+        <div class="types-modal-body">
+          <div style="padding: 16px;">
+            <p style="margin: 0 0 16px 0; color: var(--text-muted);">Choose how to aggregate the date column:</p>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 6px; transition: background 0.2s;">
+                <input type="radio" name="aggregateType" value="month" checked style="cursor: pointer;">
+                <span>Group by Month (e.g., "Jan 2025", "Feb 2025")</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 6px; transition: background 0.2s;">
+                <input type="radio" name="aggregateType" value="year" style="cursor: pointer;">
+                <span>Group by Year (e.g., "2025", "2026")</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="types-modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+          <button type="button" id="applyAggregateBtn">Apply</button>
+          <button type="button" class="secondary" id="aggregateModalCloseBtn">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(aggregateModal);
+
+    // Sort modal
+    const sortModal = document.createElement("div");
+    sortModal.className = "types-modal";
+    sortModal.id = "sortModal";
+    sortModal.innerHTML = `
+      <div class="types-modal-content">
+        <div class="types-modal-header">
+          <h3 class="types-modal-title" id="sortModalTitle">Sort Date Column</h3>
+          <button class="modal-close" id="sortModalClose" aria-label="Close">×</button>
+        </div>
+        <div class="types-modal-body">
+          <div style="padding: 16px;">
+            <p style="margin: 0 0 16px 0; color: var(--text-muted);">Choose sort order:</p>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 6px; transition: background 0.2s;">
+                <input type="radio" name="sortOrderDate" value="newest" checked style="cursor: pointer;">
+                <span>Newest to Oldest</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 6px; transition: background 0.2s;">
+                <input type="radio" name="sortOrderDate" value="oldest" style="cursor: pointer;">
+                <span>Oldest to Newest</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="types-modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+          <button type="button" id="applySortBtn">Apply</button>
+          <button type="button" class="secondary" id="sortModalCloseBtn">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(sortModal);
+
     const viewTypesItem = document.getElementById("viewTypesItem");
+    const aggregateItem = document.getElementById("aggregateItem");
+    const unaggregateItem = document.getElementById("unaggregateItem");
     const typesModalClose = document.getElementById("typesModalClose");
+    const aggregateModalClose = document.getElementById("aggregateModalClose");
+    const aggregateModalCloseBtn = document.getElementById("aggregateModalCloseBtn");
+    const applyAggregateBtn = document.getElementById("applyAggregateBtn");
     const typesModalCloseBtn = document.getElementById("typesModalCloseBtn");
     const typesModalTitle = document.getElementById("typesModalTitle");
     const typesList = document.getElementById("typesList");
     const applyFiltersBtn = document.getElementById("applyFiltersBtn");
     const clearFiltersBtn = document.getElementById("clearFiltersBtn");
+    const selectAllTypesBtn = document.getElementById("selectAllTypesBtn");
+    const typesSearchInput = document.getElementById("typesSearchInput");
 
     let currentColumnIndex = -1;
     let currentColumnName = "";
+    let activeFilters = null; // Store active filter state: { columnIndex, hiddenTypes }
+    let aggregatedColumns = new Map(); // Track aggregated columns by column name: { columnName: { type: 'month'|'year', originalColumnIndex: number } }
+    let originalUnaggregatedData = null; // Store original data before aggregation
     let hiddenTypes = new Set(); // Track hidden types for current column
+    let allTypesData = []; // Store all types data for filtering
 
     // Close context menu when clicking elsewhere
     document.addEventListener("click", (e) => {
@@ -1428,11 +1833,65 @@
       }
     });
 
+    // Check if a column contains dates (including aggregated dates like "Feb 2000" or "2025")
+    function isDateColumn(columnIndex) {
+      if (!fullscreenData || fullscreenData.length < 2) return false;
+      
+      // If this column is already aggregated, it's still a date column
+      const colName = fullscreenData[0][columnIndex];
+      if (aggregatedColumns.has(colName)) {
+        return true;
+      }
+      
+      // Check first 100 non-empty values in the column
+      let dateCount = 0;
+      let checkedCount = 0;
+      for (let i = 1; i < fullscreenData.length && checkedCount < 100; i++) {
+        const row = fullscreenData[i];
+        if (!row || row[columnIndex] === undefined || row[columnIndex] === null || row[columnIndex] === "") {
+          continue;
+        }
+        checkedCount++;
+        const value = String(row[columnIndex]).trim();
+        
+        // Check for aggregated date formats first (MMM YYYY like "Feb 2000" or YYYY-MM or YYYY)
+        if (/^[A-Za-z]{3} \d{4}$/.test(value) || /^\d{4}-\d{2}$/.test(value) || /^\d{4}$/.test(value)) {
+          dateCount++;
+          continue;
+        }
+        
+        // Try to parse as date
+        const date = new Date(value);
+        // Check if it's a valid date and matches common date patterns
+        if (!isNaN(date.getTime()) && (
+          /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(value) || // MM/DD/YYYY or MM/DD/YY
+          /^\d{4}-\d{2}-\d{2}$/.test(value) || // YYYY-MM-DD
+          /^\d{1,2}-\d{1,2}-\d{2,4}$/.test(value) // MM-DD-YYYY
+        )) {
+          dateCount++;
+        }
+      }
+      
+      // Consider it a date column if at least 80% of checked values are dates
+      return checkedCount > 0 && (dateCount / checkedCount) >= 0.8;
+    }
+
     // Show context menu
     function showContextMenu(e, columnIndex, columnName) {
       e.preventDefault();
       currentColumnIndex = columnIndex;
       currentColumnName = columnName;
+      
+      // Check if column is a date column
+      const isDate = isDateColumn(columnIndex);
+      // Use the columnName parameter that was passed in (it's the header value)
+      const isAggregated = aggregatedColumns.has(columnName);
+      
+      // Show/hide menu items
+      viewTypesItem.style.display = "block";
+      aggregateItem.style.display = isDate && !isAggregated ? "block" : "none";
+      unaggregateItem.style.display = isDate && isAggregated ? "block" : "none";
+      sortItem.style.display = isDate ? "block" : "none";
       
       contextMenu.style.left = e.pageX + "px";
       contextMenu.style.top = e.pageY + "px";
@@ -1464,12 +1923,33 @@
       // Update modal title
       typesModalTitle.textContent = `Types in "${currentColumnName}"`;
       
-      // Clear and populate types list
+      // Store all types data for filtering
+      allTypesData = sortedTypes;
+      
+      // Clear search input
+      const typesSearchInput = document.getElementById("typesSearchInput");
+      if (typesSearchInput) {
+        typesSearchInput.value = "";
+      }
+      
+      // Render types list
+      renderTypesList(sortedTypes);
+      
+      // Update filter button visibility
+      clearFiltersBtn.style.display = hiddenTypes.size > 0 ? "block" : "none";
+      
+      // Show modal
+      typesModal.classList.add("active");
+      document.body.style.overflow = "hidden";
+    });
+
+    // Function to render types list
+    function renderTypesList(typesToRender) {
       typesList.innerHTML = "";
-      if (sortedTypes.length === 0) {
-        typesList.innerHTML = '<div style="padding: 12px; color: var(--text-muted); text-align: center;">No data found in this column</div>';
+      if (typesToRender.length === 0) {
+        typesList.innerHTML = '<div style="padding: 12px; color: var(--text-muted); text-align: center;">No matching types found</div>';
       } else {
-        sortedTypes.forEach(([value, count]) => {
+        typesToRender.forEach(([value, count]) => {
           const typeItem = document.createElement("div");
           typeItem.className = "type-item";
           const isHidden = hiddenTypes.has(value);
@@ -1486,14 +1966,24 @@
           typesList.appendChild(typeItem);
         });
       }
-      
-      // Update filter button visibility
-      clearFiltersBtn.style.display = hiddenTypes.size > 0 ? "block" : "none";
-      
-      // Show modal
-      typesModal.classList.add("active");
-      document.body.style.overflow = "hidden";
-    });
+    }
+
+    // Search functionality for types modal
+    if (typesSearchInput) {
+      typesSearchInput.addEventListener("input", (e) => {
+        const searchQuery = e.target.value.toLowerCase().trim();
+        if (searchQuery === "") {
+          // Show all types
+          renderTypesList(allTypesData);
+        } else {
+          // Filter types based on search query
+          const filteredTypes = allTypesData.filter(([value, count]) => {
+            return value.toLowerCase().includes(searchQuery);
+          });
+          renderTypesList(filteredTypes);
+        }
+      });
+    }
 
     // Apply filters button
     applyFiltersBtn.addEventListener("click", () => {
@@ -1504,27 +1994,47 @@
         hiddenTypes.add(cb.dataset.typeValue);
       });
       
+      // Store active filter state - use column name so it persists across column selection changes
+      activeFilters = {
+        columnIndex: currentColumnIndex, // Keep for backward compatibility with fullscreen
+        columnName: currentColumnName, // Store column name for mapping in buildOutputRows
+        hiddenTypes: new Set(hiddenTypes)
+      };
+      
       // Store original data if not already stored
       if (!originalFullscreenData) {
-        originalFullscreenData = fullscreenData;
+        originalFullscreenData = fullOutputRows;
       }
       
       // Filter the data
       if (hiddenTypes.size > 0) {
-        fullscreenData = originalFullscreenData.filter((row, index) => {
+        const filteredData = originalFullscreenData.filter((row, index) => {
           // Keep header row
           if (index === 0) return true;
           // Filter out rows where the column value is in hiddenTypes
           const cellValue = String(row[currentColumnIndex] || "").trim();
           return !hiddenTypes.has(cellValue);
         });
+        
+        fullscreenData = filteredData;
+        fullOutputRows = filteredData; // Update source data for download
       } else {
         // No filters, restore original data
         fullscreenData = originalFullscreenData;
+        fullOutputRows = originalFullscreenData;
+        activeFilters = null;
       }
       
       // Re-render the table with filtered data
       renderFullscreenTablePage();
+      
+      // Update preview table if it's visible
+      if (previewCard.style.display !== "none") {
+        const previewResult = buildOutputRows();
+        if (previewResult) {
+          renderPreview(previewResult);
+        }
+      }
       
       // Update types list to reflect hidden state
       typesList.querySelectorAll('.type-item').forEach(item => {
@@ -1544,10 +2054,18 @@
     // Clear filters button
     clearFiltersBtn.addEventListener("click", () => {
       hiddenTypes.clear();
+      activeFilters = null;
       
-      // Restore original data
-      if (originalFullscreenData) {
+      // Rebuild from original source data (not from potentially filtered originalFullscreenData)
+      const currentOutput = buildOutputRows();
+      if (currentOutput && currentOutput.length) {
+        originalFullscreenData = currentOutput;
+        fullscreenData = currentOutput;
+        fullOutputRows = currentOutput;
+      } else if (originalFullscreenData) {
+        // Fallback: restore from stored original data
         fullscreenData = originalFullscreenData;
+        fullOutputRows = originalFullscreenData;
       }
       
       // Uncheck all checkboxes
@@ -1564,6 +2082,307 @@
       
       // Re-render the table
       renderFullscreenTablePage();
+      
+      // Update preview table if it's visible
+      if (previewCard.style.display !== "none") {
+        const previewResult = buildOutputRows();
+        if (previewResult) {
+          renderPreview(previewResult);
+        }
+      }
+    });
+
+    // Select all types button
+    selectAllTypesBtn.addEventListener("click", () => {
+      const checkboxes = typesList.querySelectorAll('input[type="checkbox"]');
+      const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+      
+      // Toggle all checkboxes
+      checkboxes.forEach(cb => {
+        cb.checked = !allChecked;
+      });
+    });
+
+    // Aggregate item click handler
+    aggregateItem.addEventListener("click", () => {
+      contextMenu.classList.remove("active");
+      
+      if (!fullscreenData || currentColumnIndex < 0) return;
+      
+      // Show aggregate modal
+      aggregateModal.classList.add("active");
+      document.body.style.overflow = "hidden";
+    });
+
+    // Unaggregate item click handler
+    unaggregateItem.addEventListener("click", () => {
+      contextMenu.classList.remove("active");
+      
+      if (!fullscreenData || currentColumnIndex < 0) return;
+      
+      // Remove aggregation for this column
+      const columnName = fullscreenData[0][currentColumnIndex];
+      const aggInfo = aggregatedColumns.get(columnName);
+      if (aggInfo && aggInfo.originalData) {
+        // Restore original data for this column
+        const originalData = aggInfo.originalData;
+        fullscreenData = JSON.parse(JSON.stringify(originalData));
+        fullOutputRows = JSON.parse(JSON.stringify(originalData));
+        aggregatedColumns.delete(columnName);
+        
+        // If no more aggregated columns, clear the global originalUnaggregatedData
+        if (aggregatedColumns.size === 0) {
+          originalUnaggregatedData = null;
+        }
+        
+        // Re-render table
+        renderFullscreenTablePage();
+        
+        // Update preview if visible
+        if (previewCard.style.display !== "none") {
+          const previewResult = buildOutputRows();
+          if (previewResult) {
+            renderPreview(previewResult);
+          }
+        }
+      }
+    });
+
+    // Close aggregate modal
+    aggregateModalClose.addEventListener("click", () => {
+      aggregateModal.classList.remove("active");
+      document.body.style.overflow = "";
+    });
+
+    aggregateModalCloseBtn.addEventListener("click", () => {
+      aggregateModal.classList.remove("active");
+      document.body.style.overflow = "";
+    });
+
+    // Apply aggregation
+    applyAggregateBtn.addEventListener("click", () => {
+      const aggregateType = document.querySelector('input[name="aggregateType"]:checked').value;
+      
+      if (!fullscreenData || currentColumnIndex < 0) return;
+      
+      // Store the current data state before this aggregation (for unaggregation)
+      const dataBeforeAggregation = JSON.parse(JSON.stringify(fullscreenData));
+      
+      // Create aggregated data
+      const aggregatedData = [];
+      const header = fullscreenData[0];
+      aggregatedData.push([...header]);
+      
+      // Group rows by aggregated date value
+      const groups = new Map();
+      
+      for (let i = 1; i < fullscreenData.length; i++) {
+        const row = fullscreenData[i];
+        if (!row) continue;
+        
+        const dateValue = String(row[currentColumnIndex] || "").trim();
+        if (!dateValue) continue;
+        
+        // Parse date
+        const date = new Date(dateValue);
+        if (isNaN(date.getTime())) continue;
+        
+        // Get aggregated value
+        let aggregatedValue;
+        if (aggregateType === "month") {
+          const year = date.getFullYear();
+          const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+          const month = monthNames[date.getMonth()];
+          aggregatedValue = `${month} ${year}`;
+        } else { // year
+          aggregatedValue = String(date.getFullYear());
+        }
+        
+        // Group rows by aggregated value
+        if (!groups.has(aggregatedValue)) {
+          groups.set(aggregatedValue, []);
+        }
+        groups.get(aggregatedValue).push([...row]);
+      }
+      
+      // Sort groups by aggregated value and combine rows
+      const sortedGroups = Array.from(groups.entries()).sort((a, b) => {
+        return a[0].localeCompare(b[0]);
+      });
+      
+      sortedGroups.forEach(([aggregatedValue, rows]) => {
+        if (rows.length === 0) return;
+        
+        // Create aggregated row by combining rows in the group
+        const aggregatedRow = [];
+        const numCols = header.length;
+        
+        for (let colIdx = 0; colIdx < numCols; colIdx++) {
+          if (colIdx === currentColumnIndex) {
+            // This is the date column - use aggregated value
+            aggregatedRow.push(aggregatedValue);
+          } else {
+            // For other columns, take the first non-empty value (or sum if numeric)
+            const values = rows.map(row => row[colIdx]).filter(v => v !== undefined && v !== null && v !== "");
+            
+            if (values.length === 0) {
+              aggregatedRow.push("");
+            } else {
+              // Try to parse as number
+              const numericValues = values.map(v => {
+                const num = parseFloat(String(v).replace(/[^0-9.-]/g, ''));
+                return isNaN(num) ? null : num;
+              }).filter(n => n !== null);
+              
+              if (numericValues.length > 0) {
+                // Sum numeric values
+                const sum = numericValues.reduce((a, b) => a + b, 0);
+                aggregatedRow.push(sum);
+              } else {
+                // For text values, take the first value
+                aggregatedRow.push(values[0]);
+              }
+            }
+          }
+        }
+        
+        aggregatedData.push(aggregatedRow);
+      });
+      
+      // Update data
+      fullscreenData = aggregatedData;
+      fullOutputRows = aggregatedData;
+      
+      // Store aggregation info by column name (so it persists across rebuilds)
+      const columnName = fullscreenData[0][currentColumnIndex];
+      aggregatedColumns.set(columnName, {
+        type: aggregateType,
+        originalColumnIndex: currentColumnIndex,
+        originalData: dataBeforeAggregation
+      });
+      
+      // Update global originalUnaggregatedData if this is the first aggregation
+      if (!originalUnaggregatedData) {
+        originalUnaggregatedData = dataBeforeAggregation;
+      }
+      
+      // Close modal
+      aggregateModal.classList.remove("active");
+      document.body.style.overflow = "";
+      
+      // Re-render table
+      renderFullscreenTablePage();
+      
+      // Update preview if visible
+      if (previewCard.style.display !== "none") {
+        const previewResult = buildOutputRows();
+        if (previewResult) {
+          fullOutputRows = previewResult; // Update for download
+          renderPreview(previewResult);
+        }
+      }
+    });
+
+    // Sort item click handler
+    sortItem.addEventListener("click", () => {
+      contextMenu.classList.remove("active");
+      
+      if (!fullscreenData || currentColumnIndex < 0) return;
+      
+      // Show sort modal
+      sortModal.classList.add("active");
+      document.body.style.overflow = "hidden";
+    });
+
+    // Close sort modal
+    const sortModalClose = document.getElementById("sortModalClose");
+    const sortModalCloseBtn = document.getElementById("sortModalCloseBtn");
+    const applySortBtn = document.getElementById("applySortBtn");
+
+    sortModalClose.addEventListener("click", () => {
+      sortModal.classList.remove("active");
+      document.body.style.overflow = "";
+    });
+
+    sortModalCloseBtn.addEventListener("click", () => {
+      sortModal.classList.remove("active");
+      document.body.style.overflow = "";
+    });
+
+    // Apply sort
+    applySortBtn.addEventListener("click", () => {
+      const sortOrder = document.querySelector('input[name="sortOrderDate"]:checked').value;
+      
+      if (!fullscreenData || currentColumnIndex < 0) return;
+      
+      // Sort the data
+      const header = fullscreenData[0];
+      const dataRows = fullscreenData.slice(1);
+      
+      // Sort rows by date column
+      dataRows.sort((a, b) => {
+        const dateA = String(a[currentColumnIndex] || "").trim();
+        const dateB = String(b[currentColumnIndex] || "").trim();
+        
+        // Parse dates
+        let parsedA = null;
+        let parsedB = null;
+        
+        // Try to parse as date (handles both regular dates and aggregated dates like "Apr 2005")
+        if (dateA) {
+          // Check if it's an aggregated format like "Apr 2005" or "2005"
+          if (/^[A-Za-z]{3} \d{4}$/.test(dateA)) {
+            // Format: "Apr 2005"
+            parsedA = new Date(dateA);
+          } else if (/^\d{4}$/.test(dateA)) {
+            // Format: "2005"
+            parsedA = new Date(dateA + "-01-01");
+          } else {
+            parsedA = new Date(dateA);
+          }
+        }
+        
+        if (dateB) {
+          if (/^[A-Za-z]{3} \d{4}$/.test(dateB)) {
+            parsedB = new Date(dateB);
+          } else if (/^\d{4}$/.test(dateB)) {
+            parsedB = new Date(dateB + "-01-01");
+          } else {
+            parsedB = new Date(dateB);
+          }
+        }
+        
+        // Handle invalid dates
+        if (!parsedA || isNaN(parsedA.getTime())) return 1;
+        if (!parsedB || isNaN(parsedB.getTime())) return -1;
+        
+        // Compare dates
+        const comparison = parsedA.getTime() - parsedB.getTime();
+        return sortOrder === "newest" ? -comparison : comparison;
+      });
+      
+      // Reconstruct fullscreenData with sorted rows
+      fullscreenData = [header, ...dataRows];
+      fullOutputRows = fullscreenData;
+      
+      // Store sort info by column name
+      const columnName = header[currentColumnIndex];
+      sortedColumns.set(columnName, { order: sortOrder });
+      
+      // Close modal
+      sortModal.classList.remove("active");
+      document.body.style.overflow = "";
+      
+      // Re-render table
+      renderFullscreenTablePage();
+      
+      // Update preview if visible
+      if (previewCard.style.display !== "none") {
+        const previewResult = buildOutputRows();
+        if (previewResult) {
+          renderPreview(previewResult);
+        }
+      }
     });
   </script>
 </body>
